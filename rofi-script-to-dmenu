@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+
+if [ $# -eq 0 ]
+then
+    echo "rofi-script-to-dmenu - run a rofi script with dmenu mode"
+    echo
+    echo "Usage: rofi-script-to-dmenu SCRIPT [OPTIONS]"
+    echo
+    echo "Given a script SCRIPT that works in Rofi script mode, rofi-script-to-dmenu runs"
+    echo "it with dmenu mode. The first argument must the script but other arguments and"
+    echo "options are passed to dmenu (or rofi) as such."
+    echo
+    echo "For example, given the rofi-file-browser.sh script in Rofi repository, you can"
+    echo "run it as follows in dmenu mode:"
+    echo
+    echo "  rofi-script-to-dmenu rofi-file-browser.sh -i -p 'Cool File Browser'"
+    echo
+    echo "If you want to pass arguments to your script, just enclose the script and its"
+    echo "arguments with quotes."
+    echo
+    echo "If no arguments are given, this help text is shown."
+    echo
+    echo "If rofi executable is in PATH, it is used (with -dmenu option), otherwise dmenu"
+    echo "executable is used."
+    exit 0
+fi
+
+command -v rofi >/dev/null
+rofi_exists=$?
+if [ $rofi_exists -eq 0 ]
+then
+    dmenu="rofi -dmenu"
+else
+    dmenu="dmenu"
+fi
+
+# Parse the script
+script="$1"
+shift 1
+
+# Parse other command line arguments
+dmenu_options="$@"
+
+exit_on_empty=${ROFI_SCRIPT_TO_DMENU_AUTOEXIT:0}
+
+# Run the script once
+choices=$($script)
+
+if [ -n "$choices" ]
+then
+    was_initially_empty=0
+else
+    was_initially_empty=1
+fi
+
+# Show dmenu as long as the script provides some output
+while [[ -n "$choices" || "$exit_on_empty" -eq 0 ]]
+do
+    # Open dmenu to show the choices
+    choice=$(printf "$choices" | $dmenu $dmenu_options $@)
+    if [ $? -ne 0 ]
+    then
+        break
+    fi
+    if [ $was_initially_empty -eq 1 ]
+    then
+        break
+    fi
+
+    # Run the script again
+    choices=$($script "$choice")
+    # After the first run, we always exit on empty output
+    exit_on_empty=1
+done

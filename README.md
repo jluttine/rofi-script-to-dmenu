@@ -5,7 +5,9 @@ rofi).
 
 Just give a normal rofi script **that can be used in rofi script mode** as an
 argument and rofi-script-to-dmenu will take care of the rest. It'll also pass
-any options to dmenu.
+any options to dmenu. In addition, mode options printed with the special
+rofi-script syntax by starting a line with the null byte are handled correctly
+and passed to rofi/dmenu. See rofi-script man page for more information.
 
 **Note that this tool will not work with many rofi scripts that are stand-alone
 scripts (i.e., they call rofi themselves) instead of being written for the rofi

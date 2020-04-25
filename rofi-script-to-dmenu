@@ -26,26 +26,128 @@ then
 fi
 
 command -v rofi >/dev/null
-rofi_exists=$?
-if [ $rofi_exists -eq 0 ]
+if [ $? -eq 0 ]
 then
-    dmenu="rofi -dmenu"
+    use_rofi=1
 else
-    dmenu="dmenu"
+    use_rofi=0
 fi
 
 # Parse the script
 script="$1"
 shift 1
 
-# Parse other command line arguments
-dmenu_options="$@"
-
 exit_on_empty=${ROFI_SCRIPT_TO_DMENU_AUTOEXIT:0}
+
+run_script () {
+
+    if [ initial_run = true ]
+    then
+        hexdump="$($script | xxd -p)"
+    else
+        hexdump="$($script "$choice" | xxd -p)"
+    fi
+
+    flags=()
+    choices=""
+    while read
+    do
+        # Note that $REPLY is a line in hexdump format.
+        case "$REPLY" in
+            00*)
+                # The line starts with \0, so do not print anything. Instead try
+                # to parse the options. See "man rofi-script" for more
+                # information.
+                #
+                # Replace 00 (\0) with ; and 1f (\x1f) with = in order to have a
+                # format ;key=value where now key and value are still in hex
+                # format. Just need to convert those back at the end.
+                options=$(
+                    echo -e "$REPLY" |
+                        sed -E "s/(..)/\1,/g" |  # Group 2-char hexes by commas
+                        sed -E "s/1f,/=/g" |  # Replace \x1f with =
+                        sed -E "s/00,/;/g" |  # Replace \0 with ;
+                        sed -E "s/,//g"  # Remove the commas
+                )
+                # Parse key from ";key=value" and convert from hexdump
+                key=$(
+                    echo -e "$options" |
+                        sed -E "s/^;(([[:alnum:]]+)=[[:alnum:]]*)?.*/\2/" |
+                        xxd -p -r
+                )
+                # Parse value from ";key=value" and convert from hexdump
+                value=$(
+                    echo -e "$options" |
+                        sed -E "s/^;([[:alnum:]]+=([[:alnum:]]*))?.*/\2/" |
+                        xxd -p -r
+                )
+                case "$key" in
+                    "prompt")
+                        flags+=("-p" "$value")
+                        ;;
+                    "message")
+                        if [ $use_rofi -eq 1 ]
+                        then
+                            flags+=("-mesg" "$value")
+                        fi
+                        ;;
+                    "markup-rows")
+                        if [ "x$value" = "xtrue" ] && [ $use_rofi -eq 1 ]
+                        then
+                            flags+=("-markup-rows")
+                        fi
+                        ;;
+                    "urgent")
+                        if [ $use_rofi -eq 1 ]
+                        then
+                            flags+=("-u" "$value")
+                        fi
+                        ;;
+                    "active")
+                        if [ $use_rofi -eq 1 ]
+                        then
+                            flags+=("-a" "$value")
+                        fi
+                        ;;
+                    "delim")
+                        if  [ $use_rofi -eq 1 ]
+                        then
+                            flags+=("-sep" "$value")
+                        fi
+                        ;;
+                    "no-custom")
+                        if [ "x$value" = "xtrue" ] && [ $use_rofi -eq 1 ]
+                        then
+                            flags+=("-no-custom")
+                        fi
+                        ;;
+                esac
+                ;;
+            *)
+                # The line didn't start with \0 so let's concatenate it to our
+                # output (also add the newline \x0a).
+                choices="${choices}${REPLY}0a"
+                ;;
+        esac
+    done < <(
+        # Feed each line in hexdump format. Note that we need to use hexdump
+        # format in order to capture special characters like the null byte \0
+        # and the unit separator \x1f.
+        echo -en $hexdump |
+            tr -d '\n' |  # Remove newlines xxd created for printing purposes
+            tr -d ' ' |  # Remove whitespace xxd created
+            sed -E "s/((..))/\1,/g" |  # Group 2-characters hexes by commas
+            sed -E "s/0a,/\n/g" |  # Put newlines as they originally were
+            sed -E "s/,//g"  # Remove the commas used for grouping
+    )
+
+}
 
 # Run the script once. NOTE: Make a hexdump in order to capture special
 # characters like null byte etc in case formatting is used.
-choices=$($script | xxd)
+initial_run=true
+run_script
+initial_run=false
 
 if [ -n "$choices" ]
 then
@@ -57,12 +159,25 @@ fi
 # Show dmenu as long as the script provides some output
 while [[ -n "$choices" || "$exit_on_empty" -eq 0 ]]
 do
-    # Open dmenu to show the choices. Hexdump needs to be converted.
-    choice=$(echo "$choices" | xxd -r | $dmenu $dmenu_options $@)
-    if [ $? -ne 0 ]
+    # Open rofi/dmenu to show the choices. Hexdump needs to be converted. Note
+    # that rofi and dmenu handle command-line arguments a bit differently: rofi
+    # uses the first occurrence of an option whereas dmenu uses the last
+    # occurrence. So, the flags need to be given in a bit different order.
+    if [ $use_rofi -eq 1 ]
     then
-        break
+        choice=$(echo "$choices" | xxd -p -r | rofi -dmenu "$@" "${flags[@]}")
+    else
+        choice=$(echo "$choices" | xxd -p -r | dmenu "${flags[@]}" "$@")
     fi
+
+    # Fail if dmenu failed
+    status=$?
+    if [ $status -ne 0 ]
+    then
+        exit $status
+    fi
+
+    # If there was nothing to choose from in the first place, just exit
     if [ $was_initially_empty -eq 1 ]
     then
         break
@@ -70,7 +185,8 @@ do
 
     # Run the script again. And again, use hexdump so special characters are
     # captured.
-    choices=$($script "$choice" | xxd)
+    run_script
+
     # After the first run, we always exit on empty output
     exit_on_empty=1
 done
